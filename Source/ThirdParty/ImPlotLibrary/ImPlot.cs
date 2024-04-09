@@ -1,8 +1,8 @@
 using UnrealBuildTool;
 
-public class ImPlotLibrary : ModuleRules
+public class ImPlot : ModuleRules
 {
-	public ImPlotLibrary(ReadOnlyTargetRules Target) : base(Target)
+	public ImPlot(ReadOnlyTargetRules Target) : base(Target)
 	{
 		Type = ModuleType.External;
 		PublicSystemIncludePaths.Add(ModuleDirectory);

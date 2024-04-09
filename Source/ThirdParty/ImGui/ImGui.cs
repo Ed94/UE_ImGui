@@ -1,8 +1,8 @@
 using UnrealBuildTool;
 
-public class ImGuiLibrary : ModuleRules
+public class ImGui : ModuleRules
 {
-	public ImGuiLibrary(ReadOnlyTargetRules Target) : base(Target)
+	public ImGui(ReadOnlyTargetRules Target) : base(Target)
 	{
 		Type = ModuleType.External;
 		PublicSystemIncludePaths.Add(ModuleDirectory);

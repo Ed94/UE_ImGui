@@ -1,17 +1,17 @@
 ﻿using UnrealBuildTool;
 
-public class ImGui : ModuleRules
+public class UE_ImGui : ModuleRules
 {
-	public ImGui(ReadOnlyTargetRules Target) : base(Target)
+	public UE_ImGui(ReadOnlyTargetRules Target) : base(Target)
 	{
 		PCHUsage = PCHUsageMode.UseExplicitOrSharedPCHs;
 
 		PublicDependencyModuleNames.AddRange(new[]
 		{
 			"Core",
-			"ImGuiLibrary",
-			"ImPlotLibrary",
-			"NetImGuiLibrary"
+			"ImGui",
+			"ImPlot",
+			"NetImGui"
 		});
 
 		PrivateDependencyModuleNames.AddRange(new[]
