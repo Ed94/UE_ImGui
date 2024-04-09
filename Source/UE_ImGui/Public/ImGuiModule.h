@@ -6,7 +6,7 @@ class FImGuiContext;
 class SWindow;
 class UGameViewportClient;
 
-class IMGUI_API FImGuiModule : public IModuleInterface
+class UE_IMGUI_API FImGuiModule : public IModuleInterface
 {
 public:
 	virtual void StartupModule() override;

@@ -62,7 +62,7 @@ namespace ImGui
 	///		ImGui::ShowDemoWindow();
 	///	}
 	/// @endcode
-	struct IMGUI_API FScopedContext
+	struct UE_IMGUI_API FScopedContext
 	{
 		UE_NODISCARD_CTOR explicit FScopedContext(const int32 PIEInstance = GPlayInEditorID);
 		UE_NODISCARD_CTOR explicit FScopedContext(const TSharedPtr<FImGuiContext>& InContext);
@@ -84,8 +84,8 @@ namespace ImGui
 	};
 
 	/// Converts between Unreal and ImGui key types
-	IMGUI_API ImGuiKey ConvertKey(const FKey& Key);
+	UE_IMGUI_API ImGuiKey ConvertKey(const FKey& Key);
 
 	/// Converts between Unreal and ImGui 32-bit color types
-	IMGUI_API FColor ConvertColor(uint32 Color);
+	UE_IMGUI_API FColor ConvertColor(uint32 Color);
 }

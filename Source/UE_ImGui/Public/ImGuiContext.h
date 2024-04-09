@@ -15,7 +15,7 @@ struct ImGuiContext;
 struct ImGuiViewport;
 struct ImPlotContext;
 
-struct IMGUI_API FImGuiViewportData
+struct UE_IMGUI_API FImGuiViewportData
 {
 	/// Returns the existing viewport data or creates one
 	static FImGuiViewportData* GetOrCreate(ImGuiViewport* Viewport);
@@ -24,7 +24,7 @@ struct IMGUI_API FImGuiViewportData
 	TWeakPtr<SImGuiOverlay> Overlay = nullptr;
 };
 
-class IMGUI_API FImGuiContext : public TSharedFromThis<FImGuiContext>
+class UE_IMGUI_API FImGuiContext : public TSharedFromThis<FImGuiContext>
 {
 public:
 	/// Creates a managed ImGui context
