@@ -2,7 +2,7 @@
 	"FileVersion": 3,
 	"Version": 2,
 	"VersionName": "1.1",
-	"FriendlyName": "ImGui",
+	"FriendlyName": "UE_ImGui",
 	"Description": "",
 	"Category": "Other",
 	"CreatedBy": "VesCodes",
@@ -11,7 +11,7 @@
 	"MarketplaceURL": "",
 	"Modules": [
 		{
-			"Name": "ImGui",
+			"Name": "UE_ImGui",
 			"Type": "Runtime",
 			"LoadingPhase": "Default"
 		}
