@@ -32,8 +32,13 @@ struct SavedImguiContext
 	void					Restore(ImGuiContext* copyTo);	
 	const char*				mBackendPlatformName						= nullptr;
 	const char*				mBackendRendererName						= nullptr;
+#if IMGUI_VERSION_NUM >= 19110
+	const char*				(*mGetClipboardTextFn)(ImGuiContext*)				= nullptr;
+    void					(*mSetClipboardTextFn)(ImGuiContext*, const char*)	= nullptr;
+#else
 	const char*				(*mGetClipboardTextFn)(void*)				= nullptr;
     void					(*mSetClipboardTextFn)(void*, const char*)	= nullptr;
+#endif
 	void*					mClipboardUserData							= nullptr;
     void*					mImeWindowHandle							= nullptr;
 	float					mFontGlobalScale							= 1.f;

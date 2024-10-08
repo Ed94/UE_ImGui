@@ -2,7 +2,11 @@
 
 #include <Framework/Application/SlateApplication.h>
 #include <HAL/LowLevelMemTracker.h>
+#include <HAL/PlatformApplicationMisc.h>
+#include <HAL/PlatformProcess.h>
+#include <HAL/PlatformString.h>
 #include <HAL/UnrealMemory.h>
+#include <Misc/EngineVersionComparison.h>
 #include <Widgets/SWindow.h>
 
 #if WITH_ENGINE
@@ -89,6 +93,7 @@ static void ImGui_CreateWindow(ImGuiViewport* Viewport)
 			[
 				SAssignNew(ViewportData->Overlay, SImGuiOverlay)
 				.Context(FImGuiContext::Get(ImGui::GetCurrentContext()))
+				.HandleInput(false)
 			];
 
 		if (ParentWindow.IsValid())
@@ -98,6 +103,11 @@ static void ImGui_CreateWindow(ImGuiViewport* Viewport)
 		else
 		{
 			FSlateApplication::Get().AddWindow(Window);
+		}
+
+		if (!(Viewport->Flags & ImGuiViewportFlags_OwnedByApp))
+		{
+			FSlateThrottleManager::Get().DisableThrottle(true);
 		}
 	}
 }
@@ -113,6 +123,8 @@ static void ImGui_DestroyWindow(ImGuiViewport* Viewport)
 			{
 				Window->RequestDestroyWindow();
 			}
+
+			FSlateThrottleManager::Get().DisableThrottle(false);
 		}
 
 		Viewport->PlatformUserData = nullptr;
@@ -231,14 +243,14 @@ static bool ImGui_GetWindowMinimized(ImGuiViewport* Viewport)
 	return false;
 }
 
-static void ImGui_SetWindowTitle(ImGuiViewport* Viewport, const char* TitleAnsi)
+static void ImGui_SetWindowTitle(ImGuiViewport* Viewport, const char* Title)
 {
 	const FImGuiViewportData* ViewportData = FImGuiViewportData::GetOrCreate(Viewport);
 	if (ViewportData)
 	{
 		if (const TSharedPtr<SWindow> Window = ViewportData->Window.Pin())
 		{
-			Window->SetTitle(FText::FromString(ANSI_TO_TCHAR(TitleAnsi)));
+			Window->SetTitle(FText::FromString(UTF8_TO_TCHAR(Title)));
 		}
 	}
 }
@@ -255,7 +267,7 @@ static void ImGui_SetWindowAlpha(ImGuiViewport* Viewport, float Alpha)
 	}
 }
 
-static void ImGui_RenderWindow(ImGuiViewport* Viewport, void* Data)
+static void ImGui_RenderWindow(ImGuiViewport* Viewport, void* UserData)
 {
 	const FImGuiViewportData* ViewportData = FImGuiViewportData::GetOrCreate(Viewport);
 	if (ViewportData)
@@ -265,6 +277,33 @@ static void ImGui_RenderWindow(ImGuiViewport* Viewport, void* Data)
 			Overlay->SetDrawData(Viewport->DrawData);
 		}
 	}
+}
+
+const char* ImGui_GetClipboardText(ImGuiContext* Context)
+{
+	TArray<char>* ClipboardBuffer = static_cast<TArray<char>*>(Context->PlatformIO.Platform_ClipboardUserData);
+	if (ClipboardBuffer)
+	{
+		FString ClipboardText;
+		FPlatformApplicationMisc::ClipboardPaste(ClipboardText);
+
+		ClipboardBuffer->SetNumUninitialized(FPlatformString::ConvertedLength<UTF8CHAR>(*ClipboardText));
+		FPlatformString::Convert(reinterpret_cast<UTF8CHAR*>(ClipboardBuffer->GetData()), ClipboardBuffer->Num(), *ClipboardText, ClipboardText.Len() + 1);
+
+		return ClipboardBuffer->GetData();
+	}
+
+	return nullptr;
+}
+
+void ImGui_SetClipboardText(ImGuiContext* Context, const char* ClipboardText)
+{
+	FPlatformApplicationMisc::ClipboardCopy(UTF8_TO_TCHAR(ClipboardText));
+}
+
+static bool ImGui_OpenInShell(ImGuiContext* Context, const char* Path)
+{
+	return FPlatformProcess::LaunchFileInDefaultExternalApplication(UTF8_TO_TCHAR(Path));
 }
 
 TSharedRef<FImGuiContext> FImGuiContext::Create()
@@ -306,6 +345,7 @@ void FImGuiContext::Initialize()
 	IO.ConfigFlags |= ImGuiConfigFlags_NavEnableGamepad;
 	IO.ConfigFlags |= ImGuiConfigFlags_NavEnableSetMousePos;
 	IO.ConfigFlags |= ImGuiConfigFlags_DockingEnable;
+	IO.ConfigFlags |= ImGuiConfigFlags_DpiEnableScaleViewports;
 
 	IO.BackendFlags |= ImGuiBackendFlags_HasMouseCursors;
 	IO.BackendFlags |= ImGuiBackendFlags_HasSetMousePos;
@@ -313,16 +353,22 @@ void FImGuiContext::Initialize()
 	IO.BackendFlags |= ImGuiBackendFlags_RendererHasViewports;
 	IO.BackendFlags |= ImGuiBackendFlags_RendererHasVtxOffset;
 
+#if UE_VERSION_OLDER_THAN(5, 5, 0)
+	const int32 PieSessionId = GPlayInEditorID;
+#else
+	const int32 PieSessionId = UE::GetPlayInEditorID();
+#endif
+
 	// Ensure each PIE session has a uniquely identifiable context
-	const FString ContextName = (GPlayInEditorID > 0 ? FString::Printf(TEXT("ImGui_%d"), static_cast<int32>(GPlayInEditorID)) : TEXT("ImGui"));
+	const FString ContextName = (PieSessionId > 0 ? FString::Printf(TEXT("ImGui_%d"), PieSessionId) : TEXT("ImGui"));
 
 	const FString IniFilename = FPaths::GeneratedConfigDir() / FPlatformProperties::PlatformName() / ContextName + TEXT(".ini");
-	FCStringAnsi::Strncpy(IniFilenameAnsi, TCHAR_TO_ANSI(*IniFilename), UE_ARRAY_COUNT(IniFilenameAnsi));
-	IO.IniFilename = IniFilenameAnsi;
+	FPlatformString::Convert(reinterpret_cast<UTF8CHAR*>(IniFilenameUtf8), UE_ARRAY_COUNT(IniFilenameUtf8), *IniFilename, IniFilename.Len() + 1);
+	IO.IniFilename = IniFilenameUtf8;
 
 	const FString LogFilename = FPaths::ProjectLogDir() / ContextName + TEXT(".log");
-	FCStringAnsi::Strncpy(LogFilenameAnsi, TCHAR_TO_ANSI(*LogFilename), UE_ARRAY_COUNT(LogFilenameAnsi));
-	IO.LogFilename = LogFilenameAnsi;
+	FPlatformString::Convert(reinterpret_cast<UTF8CHAR*>(LogFilenameUtf8), UE_ARRAY_COUNT(LogFilenameUtf8), *LogFilename, LogFilename.Len() + 1);
+	IO.LogFilename = LogFilenameUtf8;
 
 	ImGuiPlatformIO& PlatformIO = ImGui::GetPlatformIO();
 
@@ -340,8 +386,16 @@ void FImGuiContext::Initialize()
 	PlatformIO.Platform_SetWindowAlpha = ImGui_SetWindowAlpha;
 	PlatformIO.Platform_RenderWindow = ImGui_RenderWindow;
 
+	PlatformIO.Platform_ClipboardUserData = &ClipboardBuffer;
+	PlatformIO.Platform_GetClipboardTextFn = ImGui_GetClipboardText;
+	PlatformIO.Platform_SetClipboardTextFn = ImGui_SetClipboardText;
+	PlatformIO.Platform_OpenInShellFn = ImGui_OpenInShell;
+
 	const FString FontPath = FPaths::EngineContentDir() / TEXT("Slate/Fonts/Roboto-Regular.ttf");
-	IO.Fonts->AddFontFromFileTTF(TCHAR_TO_ANSI(*FontPath), 16);
+	if (FPaths::FileExists(*FontPath))
+	{
+		IO.Fonts->AddFontFromFileTTF(TCHAR_TO_UTF8(*FontPath), 16);
+	}
 
 	if (FSlateApplication::IsInitialized())
 	{
@@ -351,7 +405,7 @@ void FImGuiContext::Initialize()
 		if (const TSharedPtr<GenericApplication> PlatformApplication = FSlateApplication::Get().GetPlatformApplication())
 		{
 			FDisplayMetrics DisplayMetrics;
-			PlatformApplication->GetInitialDisplayMetrics(DisplayMetrics);
+			FDisplayMetrics::RebuildDisplayMetrics(DisplayMetrics);
 			PlatformApplication->OnDisplayMetricsChanged().AddSP(this, &FImGuiContext::OnDisplayMetricsChanged);
 			OnDisplayMetricsChanged(DisplayMetrics);
 		}
@@ -398,12 +452,18 @@ bool FImGuiContext::Listen(int16 Port)
 
 	TAnsiStringBuilder<128> ClientName;
 	ClientName << FApp::GetProjectName();
-	if (GPlayInEditorID > 0)
+
+#if UE_VERSION_OLDER_THAN(5, 5, 0)
+	const int32 PieSessionId = GPlayInEditorID;
+#else
+	const int32 PieSessionId = UE::GetPlayInEditorID();
+#endif
+
+	if (PieSessionId > 0)
 	{
-		ClientName.Appendf(" (%d)", GPlayInEditorID);
+		ClientName << " (" << PieSessionId << ")";
 	}
 
-	// #TODO(Ves): [24/12/23] Returns false but is actually successful?
 	NetImgui::ConnectFromApp(ClientName.ToString(), Port);
 	bIsRemote = true;
 
@@ -416,12 +476,18 @@ bool FImGuiContext::Connect(const FString& Host, int16 Port)
 
 	TAnsiStringBuilder<128> ClientName;
 	ClientName << FApp::GetProjectName();
-	if (GPlayInEditorID > 0)
+
+#if UE_VERSION_OLDER_THAN(5, 5, 0)
+	const int32 PieSessionId = GPlayInEditorID;
+#else
+	const int32 PieSessionId = UE::GetPlayInEditorID();
+#endif
+
+	if (PieSessionId > 0)
 	{
-		ClientName.Appendf(" (%d)", GPlayInEditorID);
+		ClientName << " (" << PieSessionId << ")";
 	}
 
-	// #TODO(Ves): [24/12/23] Returns false but is actually successful?
 	NetImgui::ConnectToApp(ClientName.ToString(), TCHAR_TO_ANSI(*Host), Port);
 	bIsRemote = true;
 
@@ -461,7 +527,7 @@ void FImGuiContext::OnDisplayMetricsChanged(const FDisplayMetrics& DisplayMetric
 		ImGuiMonitor.MainSize = FIntPoint(Monitor.DisplayRect.Right - Monitor.DisplayRect.Left, Monitor.DisplayRect.Bottom - Monitor.DisplayRect.Top);
 		ImGuiMonitor.WorkPos = FIntPoint(Monitor.WorkArea.Left, Monitor.WorkArea.Top);
 		ImGuiMonitor.WorkSize = FIntPoint(Monitor.WorkArea.Right - Monitor.WorkArea.Left, Monitor.WorkArea.Bottom - Monitor.WorkArea.Top);
-		ImGuiMonitor.DpiScale = Monitor.DPI;
+		ImGuiMonitor.DpiScale = Monitor.DPI / 96.0f;
 
 		if (Monitor.bIsPrimary)
 		{
