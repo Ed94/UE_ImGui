@@ -8,6 +8,14 @@
 #include <Misc/AssertionMacros.h>
 #include <Misc/EngineVersionComparison.h>
 
+class FImGuiContext;
+class UTexture;
+struct FKey;
+struct FSlateBrush;
+enum ImGuiKey : int;
+struct ImGuiContext;
+struct ImPlotContext;
+
 #define IM_ASSERT(Expr) ensure(Expr)
 
 #define IMGUI_DISABLE_OBSOLETE_FUNCTIONS
@@ -50,16 +58,10 @@ uint64 ImFileWrite(const void* Data, uint64 Size, uint64 Count, ImFileHandle Fil
 #define IM_COL32_A_MASK ImGui::ImCol32AMask
 
 #if WITH_ENGINE
-#define ImTextureID class UTexture*
+#define ImTextureID UTexture*
 #else
-#define ImTextureID struct FSlateBrush*
+#define ImTextureID FSlateBrush*
 #endif
-
-class FImGuiContext;
-struct ImGuiContext;
-struct ImPlotContext;
-enum ImGuiKey : int;
-struct FKey;
 
 namespace ImGui
 {
