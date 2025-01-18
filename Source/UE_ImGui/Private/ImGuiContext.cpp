@@ -345,7 +345,11 @@ void FImGuiContext::Initialize()
 
 	IO.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
 	IO.ConfigFlags |= ImGuiConfigFlags_NavEnableGamepad;
-	IO.ConfigFlags |= ImGuiConfigFlags_NavEnableSetMousePos;
+	
+	//IO.ConfigFlags |= ImGuiConfigFlags_NavEnableSetMousePos;
+	IO.ConfigNavMoveSetMousePos = false;
+	// NOTE(ED): MAKE THIS TRUE (MAYBE) IF YOUR DOING CUSTOM IMGUI ON CONSOLES.
+	
 	IO.ConfigFlags |= ImGuiConfigFlags_DockingEnable;
 	IO.ConfigFlags |= ImGuiConfigFlags_DpiEnableScaleViewports;
 
