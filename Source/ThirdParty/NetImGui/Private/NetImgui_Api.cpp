@@ -56,8 +56,8 @@ bool ConnectToApp(const char* clientName, const char* ServerHost, uint32_t serve
 	if (client.mpSocketPending.load() != nullptr)
 	{				
 		client.ContextInitialize();
-		threadFunction		= threadFunction == nullptr ? DefaultStartCommunicationThread : threadFunction;
-		threadFunction(Client::CommunicationsClient, &client);
+		threadFunction = threadFunction == nullptr ? DefaultStartCommunicationThread : threadFunction;
+		threadFunction(Client::CommunicationsConnect, &client);
 	}
 	
 	return client.IsActive();
@@ -81,11 +81,12 @@ bool ConnectFromApp(const char* clientName, uint32_t serverPort, ThreadFunctPtr 
 	StringCopy(client.mName, (clientName == nullptr || clientName[0] == 0 ? "Unnamed" : clientName));
 	client.mpSocketPending			= Network::ListenStart(serverPort);
 	client.mFontCreationFunction	= FontCreateFunction;
+	client.mThreadFunction			= (threadFunction == nullptr) ? DefaultStartCommunicationThread : threadFunction;
 	if (client.mpSocketPending.load() != nullptr)
 	{				
 		client.ContextInitialize();
-		threadFunction		= threadFunction == nullptr ? DefaultStartCommunicationThread : threadFunction;
-		threadFunction(Client::CommunicationsHost, &client);
+		client.mSocketListenPort = serverPort;
+		client.mThreadFunction(Client::CommunicationsHost, &client);
 	}
 
 	return client.IsActive();
@@ -97,9 +98,36 @@ void Disconnect(void)
 {
 	if (!gpClientInfo) return;
 	
+	// Attempt fake connection on local socket waiting for a Server connection,
+	// so the blocking operation can terminate and release the communication thread
 	Client::ClientInfo& client	= *gpClientInfo;
-	client.mbDisconnectRequest	= true;
-	client.KillSocketListen();
+	client.mbDisconnectPending	= true;
+	client.mbDisconnectListen	= true;
+	if( client.mpSocketListen.load() != nullptr && client.mSocketListenPort != 0 )
+	{
+		Network::SocketInfo* pFakeSocket	= Network::Connect("127.0.0.1", client.mSocketListenPort);
+		client.mSocketListenPort			= 0;
+		client.mbDisconnectPending			= true;
+
+		if(pFakeSocket){
+			Network::Disconnect(pFakeSocket);
+		}
+	}
+
+	// Wait for connection attempt to complete and fail
+	while( client.mbComInitActive || client.mbClientThreadActive );
+	
+	// If fake connection to exit Listening failed, force disconnect socket directly
+	// even though it might potentially cause a race condition
+	Network::SocketInfo* pListenSocket =  client.mpSocketListen.exchange(nullptr);
+	if( pListenSocket ){
+		Network::Disconnect(pListenSocket);
+	}
+
+	Network::SocketInfo* pPendingSocket =  client.mpSocketPending.exchange(nullptr);
+	if( pPendingSocket ){
+		Network::Disconnect(pPendingSocket);
+	}
 }
 
 //=================================================================================================
@@ -112,7 +140,7 @@ bool IsConnected(void)
 
 	// If disconnected in middle of a remote frame drawing,
 	// want to behave like it is still connected to finish frame properly
-	return client.IsConnected() || IsDrawingRemote(); 
+	return client.IsConnected() || IsDrawingRemote();
 }
 
 //=================================================================================================
@@ -149,12 +177,11 @@ bool IsDrawingRemote(void)
 bool NewFrame(bool bSupportFrameSkip)
 //=================================================================================================
 {	
-	if (!gpClientInfo) return false;
+	if (!gpClientInfo || gpClientInfo->mbIsDrawing) return false;
 
 	Client::ClientInfo& client = *gpClientInfo;	
 	ScopedBool scopedInside(client.mbInsideNewEnd, true);
-	assert(!client.mbIsDrawing);
-
+	
 	// ImGui Newframe handled by remote connection settings
 	if( NetImgui::IsConnected() )
 	{		
@@ -166,10 +193,25 @@ bool NewFrame(bool bSupportFrameSkip)
 			client.ContextOverride();
 		}
 		
-		// Update input and see if remote netImgui expect a new frame
-		client.mSavedDisplaySize	= ImGui::GetIO().DisplaySize;
-		client.mbValidDrawFrame		= ProcessInputData(client);
+		auto elapsedCheck					= std::chrono::steady_clock::now() - client.mLastOutgoingDrawCheckTime;
+		auto elapsedDraw					= std::chrono::steady_clock::now() - client.mLastOutgoingDrawTime;
+		auto elapsedCheckMs					= static_cast<float>(std::chrono::duration_cast<std::chrono::microseconds>(elapsedCheck).count()) / 1000.f;
+		auto elapsedDrawMs					= static_cast<float>(std::chrono::duration_cast<std::chrono::microseconds>(elapsedDraw).count()) / 1000.f;
+		client.mLastOutgoingDrawCheckTime	= std::chrono::steady_clock::now();
 		
+		// Update input and see if remote netImgui expect a new frame
+		client.mSavedDisplaySize			= ImGui::GetIO().DisplaySize;
+		client.mbValidDrawFrame				= false;
+		
+		// Take into account delay until next method call, for more precise fps
+		if( client.mDesiredFps > 0.f && (elapsedDrawMs + elapsedCheckMs/2.f) > (1000.f/client.mDesiredFps) )
+		{
+			client.mLastOutgoingDrawTime	= std::chrono::steady_clock::now();
+			client.mbValidDrawFrame			= true;
+		}
+		
+		ProcessInputData(client);
+
 		// We are about to start drawing for remote context, check for font data update
 		const ImFontAtlas* pFonts = ImGui::GetIO().Fonts;
 		if( pFonts->TexPixelsAlpha8 && 
@@ -186,10 +228,7 @@ bool NewFrame(bool bSupportFrameSkip)
 		assert(client.mbFontUploaded);
 			
 		// Update current active content with our time
-		const auto TimeNow						= std::chrono::high_resolution_clock::now();
-		std::chrono::duration<float> elapsedSec	= TimeNow - client.mTimeTracking;
-		ImGui::GetIO().DeltaTime				= std::max<float>(1.f / 1000.f, elapsedSec.count());
-		client.mTimeTracking					= TimeNow;
+		ImGui::GetIO().DeltaTime = std::max<float>(1.f / 1000.f, elapsedCheckMs/1000.f);
 		
 		// NetImgui isn't waiting for a new frame, try to skip drawing when caller supports it
 		if( !client.mbValidDrawFrame && bSupportFrameSkip )
@@ -260,9 +299,9 @@ void EndFrame(void)
 		}
 	}
 
-	client.mbIsRemoteDrawing		= false;
-	client.mbIsDrawing				= false;
-	client.mbValidDrawFrame			= false;
+	client.mbIsRemoteDrawing	= false;
+	client.mbIsDrawing			= false;
+	client.mbValidDrawFrame		= false;
 }
 
 //=================================================================================================
@@ -301,7 +340,7 @@ void SendDataTexture(ImTextureID textureId, void* pData, uint16_t width, uint16_
 		pCmdTexture->mpTextureData.SetPtr(reinterpret_cast<uint8_t*>(&pCmdTexture[1]));
 		memcpy(pCmdTexture->mpTextureData.Get(), pData, dataSize);
 
-		pCmdTexture->mHeader.mSize			= SizeNeeded;
+		pCmdTexture->mSize					= SizeNeeded;
 		pCmdTexture->mWidth					= width;
 		pCmdTexture->mHeight				= height;
 		pCmdTexture->mTextureId				= texId64;
@@ -727,7 +766,8 @@ bool ProcessInputData(Client::ClientInfo& client)
 		uint16_t character;
 		io.InputQueueCharacters.resize(0);
 		while (client.mPendingKeyIn.ReadData(&character)){
-			io.AddInputCharacter(character);
+			ImWchar ConvertedKey = static_cast<ImWchar>(character);
+			io.AddInputCharacter(ConvertedKey);
 		}
 
 		static_assert(sizeof(client.mPreviousInputState.mInputDownMask) == sizeof(pCmdInput->mInputDownMask), "Array size should match");

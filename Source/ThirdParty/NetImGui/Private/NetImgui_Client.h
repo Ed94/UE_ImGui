@@ -32,14 +32,6 @@ struct SavedImguiContext
 	void					Restore(ImGuiContext* copyTo);	
 	const char*				mBackendPlatformName						= nullptr;
 	const char*				mBackendRendererName						= nullptr;
-#if IMGUI_VERSION_NUM >= 19110
-	const char*				(*mGetClipboardTextFn)(ImGuiContext*)				= nullptr;
-    void					(*mSetClipboardTextFn)(ImGuiContext*, const char*)	= nullptr;
-#else
-	const char*				(*mGetClipboardTextFn)(void*)				= nullptr;
-    void					(*mSetClipboardTextFn)(void*, const char*)	= nullptr;
-#endif
-	void*					mClipboardUserData							= nullptr;
     void*					mImeWindowHandle							= nullptr;
 	float					mFontGlobalScale							= 1.f;
 	float					mFontGeneratedSize							= 0.f;
@@ -48,8 +40,18 @@ struct SavedImguiContext
 	bool					mDrawMouse									= false;
 	bool					mSavedContext								= false;
 	char					mPadding1[2]								= {};
-	int						mKeyMap[ImGuiKey_COUNT]						= {};
-	char					mPadding2[8 - (sizeof(mKeyMap) % 8)]		={};	
+	void*					mClipboardUserData							= nullptr;
+#if IMGUI_VERSION_NUM < 19110
+	const char*				(*mGetClipboardTextFn)(void*)				= nullptr;
+    void					(*mSetClipboardTextFn)(void*, const char*)	= nullptr;
+#else
+	const char*				(*mGetClipboardTextFn)(ImGuiContext*)		= nullptr;
+    void					(*mSetClipboardTextFn)(ImGuiContext*, const char*)	= nullptr;
+#endif
+#if IMGUI_VERSION_NUM < 18700
+	int						mKeyMap[ImGuiKey_COUNT]						= {};	
+	char					mPadding2[8 - (sizeof(mKeyMap) % 8)]		= {};
+#endif
 };
 
 //=============================================================================
@@ -59,15 +61,15 @@ struct ClientInfo
 {
 	using VecTexture	= ImVector<ClientTexture>;
 	using BufferKeys	= Ringbuffer<uint16_t, 1024>;
-	using Time			= std::chrono::time_point<std::chrono::high_resolution_clock>;
+	using TimePoint		= std::chrono::time_point<std::chrono::steady_clock>;
 
 	struct InputState
 	{
-		uint64_t						mInputDownMask[(CmdInput::ImGuiKey_COUNT+63)/64] = {};
-		float							mInputAnalog[CmdInput::kAnalog_Count] = {};
-		uint64_t						mMouseDownMask				= 0;
-		float							mMouseWheelVertPrev			= 0.f;
-		float							mMouseWheelHorizPrev		= 0.f;
+		uint64_t	mInputDownMask[(CmdInput::ImGuiKey_COUNT+63)/64] = {};
+		float		mInputAnalog[CmdInput::kAnalog_Count] 	= {};
+		uint64_t	mMouseDownMask							= 0;
+		float		mMouseWheelVertPrev						= 0.f;
+		float		mMouseWheelHorizPrev					= 0.f;
 	};
 										ClientInfo();
 										~ClientInfo();
@@ -80,33 +82,41 @@ struct ClientInfo
 	std::atomic<Network::SocketInfo*>	mpSocketPending;						// Hold socket info until communication is established
 	std::atomic<Network::SocketInfo*>	mpSocketComs;							// Socket used for communications with server
 	std::atomic<Network::SocketInfo*>	mpSocketListen;							// Socket used to wait for communication request from server
+	std::atomic_bool					mbDisconnectPending;					// Terminate Client/Server coms
+	std::atomic_bool					mbDisconnectListen;						// Terminate waiting connection from Server
+	uint32_t							mSocketListenPort			= 0;		// Socket Port number used to wait for communication request from server
 	VecTexture							mTextures;								// List if textures created by this client (used un main thread)
 	char								mName[64]					= {};
 	uint64_t							mFrameIndex					= 0;		// Incremented everytime we send a DrawFrame Command	
-	CmdTexture*							mTexturesPending[16];
+	CmdTexture*							mTexturesPending[16]		= {};
 	ExchangePtr<CmdDrawFrame>			mPendingFrameOut;
 	ExchangePtr<CmdBackground>			mPendingBackgroundOut;
 	ExchangePtr<CmdInput>				mPendingInputIn;
 	ExchangePtr<CmdClipboard>			mPendingClipboardIn;					// Clipboard content received from Server and waiting to be taken by client
 	ExchangePtr<CmdClipboard>			mPendingClipboardOut;					// Clipboard content copied on Client and waiting to be sent to Server
 	ImGuiContext*						mpContext					= nullptr;	// Context that the remote drawing should use (either the one active when connection request happened, or a clone)
+	PendingCom 							mPendingRcv;							// Data being currently received from Server
+	PendingCom 							mPendingSend;							// Data being currently sent to Server
+	uint32_t							mPendingSendNext			= 0;		// Type of Cmd to next attempt sending, when channel is available
+	CmdPendingRead 						mCmdPendingRead;						// Used to get info on the next incoming command from Server
 	CmdInput*							mpCmdInputPending			= nullptr;	// Last Input Command from server, waiting to be processed by client
 	CmdClipboard*						mpCmdClipboard				= nullptr;	// Last received clipboad command
 	CmdDrawFrame*						mpCmdDrawLast				= nullptr;	// Last sent Draw Command. Used by data compression, to generate delta between previous and current frame
 	CmdBackground						mBGSetting;								// Current value assigned to background appearance by user
 	CmdBackground						mBGSettingSent;							// Last sent value to remote server
 	BufferKeys							mPendingKeyIn;							// Keys pressed received. Results of 2 CmdInputs are concatenated if received before being processed
+	TimePoint							mLastOutgoingDrawCheckTime;				// When we last checked if we have a pending draw command to send
+	TimePoint							mLastOutgoingDrawTime;					// When we last sent an updated draw command to the server
 	ImVec2								mSavedDisplaySize			= {0, 0};	// Save original display size on 'NewFrame' and restore it on 'EndFrame' (making sure size is still valid after a disconnect)
 	const void*							mpFontTextureData			= nullptr;	// Last font texture data send to server (used to detect if font was changed)
 	ImTextureID							mFontTextureID;
 	SavedImguiContext					mSavedContextValues;
-	Time								mTimeTracking;							// Used to update Dear ImGui time delta on remote context
 	std::atomic_uint32_t				mTexturesPendingSent;
 	std::atomic_uint32_t				mTexturesPendingCreated;
-	
-	bool								mbDisconnectRequest			= false;	// Waiting to Disconnect
-	bool								mbClientThreadActive		= false;
-	bool								mbListenThreadActive		= false;
+
+	std::atomic_bool					mbClientThreadActive;					// True when connected and communicating with Server
+	std::atomic_bool					mbListenThreadActive;					// True when listening from connection request from Server
+	std::atomic_bool					mbComInitActive;						// True when attempting to initialize a new connection
 	bool								mbHasTextureUpdate			= false;
 	bool								mbIsDrawing					= false;	// We are inside a 'NetImgui::NewFrame' / 'NetImgui::EndFrame' (even if not for a remote draw)
 	bool								mbIsRemoteDrawing			= false;	// True if the rendering it meant for the remote netImgui server
@@ -118,9 +128,11 @@ struct ClientInfo
 	uint8_t								mClientCompressionMode		= eCompressionMode::kUseServerSetting;
 	bool								mServerCompressionEnabled	= false;	// If Server would like compression to be enabled (mClientCompressionMode value can override this value)
 	bool								mServerCompressionSkip		= false;	// Force ignore compression setting for 1 frame
-	char								PADDING[1];
+	bool 								mServerForceConnectEnabled	= true;		// If another NetImguiServer can take connection away from the one currently active
+	ThreadFunctPtr						mThreadFunction				= nullptr;	// Function to use when laucnhing new threads
 	FontCreateFuncPtr					mFontCreationFunction		= nullptr;	// Method to call to generate the remote ImGui font. By default, re-use the local font, but this doesn't handle native DPI scaling on remote server
 	float								mFontCreationScaling		= 1.f;		// Last font scaling used when generating the NetImgui font
+	float 								mDesiredFps					= 30.f;		// How often we should update the remote drawing. Received from server
 	InputState							mPreviousInputState;					// Keeping track of last keyboard/mouse state
 	ImGuiID								mhImguiHookNewframe			= 0;
 	ImGuiID								mhImguiHookEndframe			= 0;
@@ -130,8 +142,6 @@ struct ClientInfo
 	inline bool							IsConnected()const;
 	inline bool							IsConnectPending()const;
 	inline bool							IsActive()const;
-	inline void							KillSocketComs();						// Kill communication sockets (should only be called from communication thread)
-	inline void							KillSocketListen();						// Kill connecting listening socket (should only be called from communication thread)
 
 // Prevent warnings about implicitly created copy
 protected:
@@ -141,9 +151,9 @@ protected:
 };
 
 //=============================================================================
-// Main communication thread, that should be started in its own thread
+// Main communication loop threads that are run in separate threads
 //=============================================================================
-void CommunicationsClient(void* pClientVoid);
+void CommunicationsConnect(void* pClientVoid);
 void CommunicationsHost(void* pClientVoid);
 
 }}} //namespace NetImgui::Internal::Client

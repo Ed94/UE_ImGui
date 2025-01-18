@@ -24,19 +24,20 @@ void SavedImguiContext::Save(ImGuiContext* copyFrom)
 	mBackendPlatformName	= sourceIO.BackendPlatformName;
 	mBackendRendererName	= sourceIO.BackendRendererName;
 	mDrawMouse				= sourceIO.MouseDrawCursor;
-#if IMGUI_VERSION_NUM >= 19110
-	mGetClipboardTextFn		= ImGui::GetPlatformIO().Platform_GetClipboardTextFn;
-    mSetClipboardTextFn		= ImGui::GetPlatformIO().Platform_SetClipboardTextFn;
-    mClipboardUserData		= ImGui::GetPlatformIO().Platform_ClipboardUserData;
-#else
-	mGetClipboardTextFn		= sourceIO.GetClipboardTextFn;
-    mSetClipboardTextFn		= sourceIO.SetClipboardTextFn;
-    mClipboardUserData		= sourceIO.ClipboardUserData;
-#endif
 	mFontGlobalScale		= sourceIO.FontGlobalScale;
 	mFontGeneratedSize		= sourceIO.Fonts->Fonts.Size > 0 ? sourceIO.Fonts->Fonts[0]->FontSize : 13.f; // Save size to restore the font to original size
 #if IMGUI_VERSION_NUM < 18700
 	memcpy(mKeyMap, sourceIO.KeyMap, sizeof(mKeyMap));
+#endif
+#if IMGUI_VERSION_NUM < 19110
+	mGetClipboardTextFn		= sourceIO.GetClipboardTextFn;
+    mSetClipboardTextFn		= sourceIO.SetClipboardTextFn;
+    mClipboardUserData		= sourceIO.ClipboardUserData;
+#else
+	ImGuiPlatformIO& plaformIO	= ImGui::GetPlatformIO();
+	mGetClipboardTextFn			= plaformIO.Platform_GetClipboardTextFn;
+    mSetClipboardTextFn			= plaformIO.Platform_SetClipboardTextFn;
+    mClipboardUserData			= plaformIO.Platform_ClipboardUserData;
 #endif
 }
 
@@ -49,19 +50,20 @@ void SavedImguiContext::Restore(ImGuiContext* copyTo)
 	destIO.BackendFlags			= mBackendFlags;
 	destIO.BackendPlatformName	= mBackendPlatformName;
 	destIO.BackendRendererName	= mBackendRendererName;
-	destIO.MouseDrawCursor		= mDrawMouse;
-#if IMGUI_VERSION_NUM >= 19110
-	ImGui::GetPlatformIO().Platform_GetClipboardTextFn	= mGetClipboardTextFn;
-    ImGui::GetPlatformIO().Platform_SetClipboardTextFn	= mSetClipboardTextFn;
-	ImGui::GetPlatformIO().Platform_ClipboardUserData	= mClipboardUserData;
-#else
-	destIO.GetClipboardTextFn	= mGetClipboardTextFn;
-    destIO.SetClipboardTextFn	= mSetClipboardTextFn;
-	destIO.ClipboardUserData	= mClipboardUserData;
-#endif
+	destIO.MouseDrawCursor		= mDrawMouse;	
 	destIO.FontGlobalScale		= mFontGlobalScale;
 #if IMGUI_VERSION_NUM < 18700
 	memcpy(destIO.KeyMap, mKeyMap, sizeof(destIO.KeyMap));
+#endif
+#if IMGUI_VERSION_NUM < 19110
+	destIO.GetClipboardTextFn	= mGetClipboardTextFn;
+    destIO.SetClipboardTextFn	= mSetClipboardTextFn;
+	destIO.ClipboardUserData	= mClipboardUserData;
+#else
+	ImGuiPlatformIO& plaformIO				= ImGui::GetPlatformIO();
+	plaformIO.Platform_GetClipboardTextFn 	= mGetClipboardTextFn;
+    plaformIO.Platform_SetClipboardTextFn 	= mSetClipboardTextFn;
+    plaformIO.Platform_ClipboardUserData 	= mClipboardUserData;
 #endif
 }
 
@@ -69,103 +71,76 @@ void SavedImguiContext::Restore(ImGuiContext* copyTo)
 // GET CLIPBOARD
 // Content received from the Server
 //=================================================================================================
-#if IMGUI_VERSION_NUM >= 19110
-static const char* GetClipboardTextFn_NetImguiImpl(ImGuiContext* context)
-{
-	void* user_data_ctx = context->PlatformIO.Platform_ClipboardUserData;
-#else
+#if IMGUI_VERSION_NUM < 19110
 static const char* GetClipboardTextFn_NetImguiImpl(void* user_data_ctx)
 {
-#endif
 	const ClientInfo* pClient = reinterpret_cast<const ClientInfo*>(user_data_ctx);
 	return pClient && pClient->mpCmdClipboard ? pClient->mpCmdClipboard->mContentUTF8.Get() : nullptr;
 }
+#else
+static const char* GetClipboardTextFn_NetImguiImpl(ImGuiContext* ctx)
+{
+	ScopedImguiContext scopedContext(ctx);
+	const ClientInfo* pClient = reinterpret_cast<const ClientInfo*>(ImGui::GetPlatformIO().Platform_ClipboardUserData);
+	return pClient && pClient->mpCmdClipboard ? pClient->mpCmdClipboard->mContentUTF8.Get() : nullptr;
+}
+#endif
+
 
 //=================================================================================================
 // SET CLIPBOARD
 //=================================================================================================
-#if IMGUI_VERSION_NUM >= 19110
-static void SetClipboardTextFn_NetImguiImpl(ImGuiContext* context, const char* text)
-{
-	void* user_data_ctx = context->PlatformIO.Platform_ClipboardUserData;
-#else
+#if IMGUI_VERSION_NUM < 19110
 static void SetClipboardTextFn_NetImguiImpl(void* user_data_ctx, const char* text)
 {
-#endif
 	if(user_data_ctx){
 		ClientInfo* pClient				= reinterpret_cast<ClientInfo*>(user_data_ctx);
 		CmdClipboard* pClipboardOut		= CmdClipboard::Create(text);
 		pClient->mPendingClipboardOut.Assign(pClipboardOut);
 	}
 }
-
-//=================================================================================================
-// COMMUNICATIONS INITIALIZE
-// Initialize a new connection to a RemoteImgui server
-//=================================================================================================
-bool Communications_Initialize(ClientInfo& client)
+#else
+static void SetClipboardTextFn_NetImguiImpl(ImGuiContext* ctx, const char* text)
 {
-	CmdVersion cmdVersionSend, cmdVersionRcv;
-	StringCopy(cmdVersionSend.mClientName, client.mName);
-	bool bResultSend	= Network::DataSend(client.mpSocketPending, &cmdVersionSend, cmdVersionSend.mHeader.mSize);
-	bool bResultRcv		= Network::DataReceive(client.mpSocketPending, &cmdVersionRcv, sizeof(cmdVersionRcv));
-	bool mbConnected	= bResultRcv && bResultSend && 
-						  cmdVersionRcv.mHeader.mType	== cmdVersionSend.mHeader.mType && 
-						  cmdVersionRcv.mVersion		== cmdVersionSend.mVersion &&
-						  cmdVersionRcv.mWCharSize		== cmdVersionSend.mWCharSize;	
-	if(mbConnected)
-	{				
-		for(auto& texture : client.mTextures)
-		{
-			texture.mbSent = false;
-		}
-
-		client.mbHasTextureUpdate			= true;								// Force sending the client textures
-		client.mBGSettingSent.mTextureId	= client.mBGSetting.mTextureId-1u;	// Force sending the Background settings (by making different than current settings)
-		client.mpSocketComs					= client.mpSocketPending.exchange(nullptr);
-		client.mFrameIndex					= 0;
-	}
-	return client.mpSocketComs.load() != nullptr;
+	ScopedImguiContext scopedContext(ctx);
+	ClientInfo* pClient				= reinterpret_cast<ClientInfo*>(ImGui::GetPlatformIO().Platform_ClipboardUserData);
+	CmdClipboard* pClipboardOut		= CmdClipboard::Create(text);
+	pClient->mPendingClipboardOut.Assign(pClipboardOut);
 }
+#endif
 
 //=================================================================================================
 // INCOM: INPUT
 // Receive new keyboard/mouse/screen resolution input to pass on to dearImgui
 //=================================================================================================
-void Communications_Incoming_Input(ClientInfo& client, uint8_t*& pCmdData)
+void Communications_Incoming_Input(ClientInfo& client)
 {
-	if( pCmdData )
-	{
-		auto pCmdInput	= reinterpret_cast<CmdInput*>(pCmdData);
-		pCmdData		= nullptr; // Take ownership of the data, prevent Free
-		size_t keyCount(pCmdInput->mKeyCharCount);
-		client.mPendingKeyIn.AddData(pCmdInput->mKeyChars, keyCount);
-		client.mPendingInputIn.Assign(pCmdInput);	
-	}
+	auto pCmdInput					= static_cast<CmdInput*>(client.mPendingRcv.pCommand);
+	client.mPendingRcv.bAutoFree	= false; // Taking ownership of the data
+	client.mDesiredFps 				= pCmdInput->mDesiredFps > 0.f ? pCmdInput->mDesiredFps : 0.f;
+	size_t keyCount(pCmdInput->mKeyCharCount);
+	client.mPendingKeyIn.AddData(pCmdInput->mKeyChars, keyCount);
+	client.mPendingInputIn.Assign(pCmdInput);
 }
 
 //=================================================================================================
 // INCOM: CLIPBOARD
 // Receive server new clipboard content, updating internal cache
 //=================================================================================================
-void Communications_Incoming_Clipboard(ClientInfo& client, uint8_t*& pCmdData)
+void Communications_Incoming_Clipboard(ClientInfo& client)
 {
-	if( pCmdData )
-	{
-		auto pCmdClipboard	= reinterpret_cast<CmdClipboard*>(pCmdData);
-		pCmdData			= nullptr; // Take ownership of the data, prevent Free
-		pCmdClipboard->ToPointers();
-		client.mPendingClipboardIn.Assign(pCmdClipboard);
-	}
+	auto pCmdClipboard				= static_cast<CmdClipboard*>(client.mPendingRcv.pCommand);
+	client.mPendingRcv.bAutoFree	= false; // Taking ownership of the data
+	pCmdClipboard->ToPointers();
+	client.mPendingClipboardIn.Assign(pCmdClipboard);
 }
 
 //=================================================================================================
 // OUTCOM: TEXTURE
 // Transmit all pending new/updated texture
 //=================================================================================================
-bool Communications_Outgoing_Textures(ClientInfo& client)
-{	
-	bool bSuccess(true);
+void Communications_Outgoing_Textures(ClientInfo& client)
+{
 	client.ProcessTexturePending();
 	if( client.mbHasTextureUpdate )
 	{
@@ -173,44 +148,40 @@ bool Communications_Outgoing_Textures(ClientInfo& client)
 		{
 			if( !cmdTexture.mbSent && cmdTexture.mpCmdTexture )
 			{
-				bSuccess			&= Network::DataSend(client.mpSocketComs, cmdTexture.mpCmdTexture, cmdTexture.mpCmdTexture->mHeader.mSize);
-				cmdTexture.mbSent	= bSuccess;
-				if( cmdTexture.mbSent && cmdTexture.mpCmdTexture->mFormat == eTexFormat::kTexFmt_Invalid )
-					netImguiDeleteSafe(cmdTexture.mpCmdTexture);					
+				client.mPendingSend.pCommand	= cmdTexture.mpCmdTexture;
+				client.mPendingSend.bAutoFree	= cmdTexture.mpCmdTexture->mFormat == eTexFormat::kTexFmt_Invalid; // Texture as been marked for deletion, can now free memory allocated for this
+				cmdTexture.mbSent				= true;
+				return; // Exit as soon as we find a texture to send, so thread can proceed with transmitting it
 			}
 		}
-		client.mbHasTextureUpdate = !bSuccess;
+		client.mbHasTextureUpdate = false;	// No pending texture detected, mark as 'all sent'
 	}
-	return bSuccess;
 }
 
 //=================================================================================================
 // OUTCOM: BACKGROUND
 // Transmit the current client background settings
 //=================================================================================================
-bool Communications_Outgoing_Background(ClientInfo& client)
+void Communications_Outgoing_Background(ClientInfo& client)
 {	
-	bool bSuccess(true);
 	CmdBackground* pPendingBackground = client.mPendingBackgroundOut.Release();
 	if( pPendingBackground )
 	{
-		bSuccess = Network::DataSend(client.mpSocketComs, pPendingBackground, pPendingBackground->mHeader.mSize);
-		netImguiDeleteSafe(pPendingBackground);
+		client.mPendingSend.pCommand	= pPendingBackground;
+		client.mPendingSend.bAutoFree	= false;
 	}
-	return bSuccess;
 }
 
 //=================================================================================================
 // OUTCOM: FRAME
 // Transmit a new dearImgui frame to render
 //=================================================================================================
-bool Communications_Outgoing_Frame(ClientInfo& client)
+void Communications_Outgoing_Frame(ClientInfo& client)
 {
-	bool bSuccess(true);
 	CmdDrawFrame* pPendingDraw = client.mPendingFrameOut.Release();
 	if( pPendingDraw )
 	{
-		pPendingDraw->mFrameIndex	= client.mFrameIndex++;
+		pPendingDraw->mFrameIndex = client.mFrameIndex++;
 		//---------------------------------------------------------------------
 		// Apply delta compression to DrawCommand, when requested
 		if( pPendingDraw->mCompressed )
@@ -232,178 +203,292 @@ bool Communications_Outgoing_Frame(ClientInfo& client)
 		client.mServerCompressionSkip = false;
 
 		//---------------------------------------------------------------------
-		// Send Command to server
+		// Ready to send command to server
 		pPendingDraw->ToOffsets();
-		bSuccess = Network::DataSend(client.mpSocketComs, pPendingDraw, pPendingDraw->mHeader.mSize);
-
-		//---------------------------------------------------------------------
-		// Free created data once sent (when not used in next frame)
-		if( client.mpCmdDrawLast != pPendingDraw ){
-			netImguiDeleteSafe(pPendingDraw);
-		}
+		client.mPendingSend.pCommand	= pPendingDraw;
+		client.mPendingSend.bAutoFree	= client.mpCmdDrawLast != pPendingDraw;
 	}
-	return bSuccess;
-}
-
-//=================================================================================================
-// OUTCOM: DISCONNECT
-// Signal that we will be disconnecting
-//=================================================================================================
-bool Communications_Outgoing_Disconnect(ClientInfo& client)
-{
-	if( client.mbDisconnectRequest )
-	{
-		CmdDisconnect cmdDisconnect;
-		Network::DataSend(client.mpSocketComs, &cmdDisconnect, cmdDisconnect.mHeader.mSize);
-		return false;
-	}
-	return true;
-}
-
-//=================================================================================================
-// OUTCOM: PING
-// Signal end of outgoing communications and still alive
-//=================================================================================================
-bool Communications_Outgoing_Ping(ClientInfo& client)
-{
-	CmdPing cmdPing;
-	return Network::DataSend(client.mpSocketComs, &cmdPing, cmdPing.mHeader.mSize);
 }
 
 //=================================================================================================
 // OUTCOM: Clipboard
 // Send client 'Copy' clipboard content to Server
 //=================================================================================================
-bool Communications_Outgoing_Clipboard(ClientInfo& client)
+void Communications_Outgoing_Clipboard(ClientInfo& client)
 {
-	bool bResult(true);
 	CmdClipboard* pPendingClipboard = client.mPendingClipboardOut.Release();
 	if( pPendingClipboard ){
 		pPendingClipboard->ToOffsets();
-		bResult = Network::DataSend(client.mpSocketComs, pPendingClipboard, pPendingClipboard->mHeader.mSize);
-		netImguiDeleteSafe(pPendingClipboard);
-
+		client.mPendingSend.pCommand	= pPendingClipboard;
+		client.mPendingSend.bAutoFree	= true;
 	}
-	return bResult;
 }
 
 //=================================================================================================
 // INCOMING COMMUNICATIONS
 //=================================================================================================
-bool Communications_Incoming(ClientInfo& client)
+void Communications_Incoming(ClientInfo& client)
 {
-	bool bOk(true);
-	bool bPingReceived(false);
-	while( bOk && !bPingReceived )
+	if( Network::DataReceivePending(client.mpSocketComs) )
 	{
-		CmdHeader cmdHeader;
-		uint8_t* pCmdData	= nullptr;
-		bOk					= Network::DataReceive(client.mpSocketComs, &cmdHeader, sizeof(cmdHeader));
-		if( bOk && cmdHeader.mSize > sizeof(CmdHeader) )
+		//-----------------------------------------------------------------------------------------
+		// 1. Ready to receive new command, starts the process by reading Header
+		//-----------------------------------------------------------------------------------------
+		if( client.mPendingRcv.IsReady() )
 		{
-			pCmdData								= netImguiSizedNew<uint8_t>(cmdHeader.mSize);
-			*reinterpret_cast<CmdHeader*>(pCmdData) = cmdHeader;
-			bOk										= Network::DataReceive(client.mpSocketComs, &pCmdData[sizeof(cmdHeader)], cmdHeader.mSize-sizeof(cmdHeader));	
+			client.mCmdPendingRead 		= CmdPendingRead();
+			client.mPendingRcv.pCommand	= &client.mCmdPendingRead;
+			client.mPendingRcv.bAutoFree= false;
 		}
 
-		if( bOk )
+		//-----------------------------------------------------------------------------------------
+		// 2. Read incoming command from server
+		//-----------------------------------------------------------------------------------------
+		if( client.mPendingRcv.IsPending() )
 		{
-			switch( cmdHeader.mType )
+			Network::DataReceive(client.mpSocketComs, client.mPendingRcv);
+			
+			// Detected a new command bigger than header, allocate memory for it
+			if( client.mPendingRcv.pCommand->mSize > sizeof(CmdPendingRead) && 
+				client.mPendingRcv.pCommand == &client.mCmdPendingRead )
 			{
-			case CmdHeader::eCommands::Ping:		bPingReceived = true; break;
-			case CmdHeader::eCommands::Disconnect:	bOk = false; break;
-			case CmdHeader::eCommands::Input:		Communications_Incoming_Input(client, pCmdData); break;
-			case CmdHeader::eCommands::Clipboard:	Communications_Incoming_Clipboard(client, pCmdData); break;
-			// Commands not received in main loop, by Client
-			case CmdHeader::eCommands::Invalid:
-			case CmdHeader::eCommands::Version:
-			case CmdHeader::eCommands::Texture:
-			case CmdHeader::eCommands::DrawFrame:	
-			case CmdHeader::eCommands::Background:	break;
+				CmdPendingRead* pCmdHeader 	= reinterpret_cast<CmdPendingRead*>(netImguiSizedNew<uint8_t>(client.mPendingRcv.pCommand->mSize));
+				*pCmdHeader					= client.mCmdPendingRead;
+				client.mPendingRcv.pCommand	= pCmdHeader;
+				client.mPendingRcv.bAutoFree= true;
 			}
-		}		
-		netImguiDeleteSafe(pCmdData);
+		}
+
+		//-----------------------------------------------------------------------------------------
+		// 3. Command fully received from Server, process it
+		//-----------------------------------------------------------------------------------------
+		if( client.mPendingRcv.IsDone() )
+		{
+			if( !client.mPendingRcv.IsError() )
+			{
+				switch( client.mPendingRcv.pCommand->mType )
+				{
+					case CmdHeader::eCommands::Input:		Communications_Incoming_Input(client); break;
+					case CmdHeader::eCommands::Clipboard:	Communications_Incoming_Clipboard(client); break;
+					// Commands not received in main loop, by Client
+					case CmdHeader::eCommands::Version:
+					case CmdHeader::eCommands::Texture:
+					case CmdHeader::eCommands::DrawFrame:
+					case CmdHeader::eCommands::Background:
+					case CmdHeader::eCommands::Count: break;
+				}
+			}
+
+			// Cleanup after read completion
+			if( client.mPendingRcv.IsError() ){
+				client.mbDisconnectPending = true;
+			}
+			if( client.mPendingRcv.bAutoFree ){
+				netImguiDeleteSafe(client.mPendingRcv.pCommand);
+			}
+			client.mPendingRcv = PendingCom();
+		}
 	}
-	return bOk;
+	// Prevent high CPU usage when waiting for new data
+	else
+	{
+		//std::this_thread::yield(); 
+		std::this_thread::sleep_for(std::chrono::microseconds(250));
+	}
 }
 
 //=================================================================================================
 // OUTGOING COMMUNICATIONS
 //=================================================================================================
-bool Communications_Outgoing(ClientInfo& client)
+void Communications_Outgoing(ClientInfo& client)
 {
-	bool bSuccess(true);
-	if( bSuccess ){
-		bSuccess = Communications_Outgoing_Textures(client);
-	}
-	if( bSuccess ){
-		bSuccess = Communications_Outgoing_Background(client);
-	}
-	if( bSuccess ){
-		bSuccess = Communications_Outgoing_Clipboard(client);
-	}
-	if( bSuccess ){
-		bSuccess = Communications_Outgoing_Frame(client);
-	}
-	if( bSuccess ){
-		bSuccess = Communications_Outgoing_Disconnect(client);
-	}
-	if( bSuccess ){
-		bSuccess = Communications_Outgoing_Ping(client); // Always finish with a ping
-	}
-
-	return bSuccess;
-}
-
-//=================================================================================================
-// COMMUNICATIONS THREAD 
-//=================================================================================================
-void CommunicationsClient(void* pClientVoid)
-{	
-	ClientInfo* pClient				= reinterpret_cast<ClientInfo*>(pClientVoid);
-	pClient->mbClientThreadActive	= true;
-	pClient->mbDisconnectRequest	= false;
-	Communications_Initialize(*pClient);
-	bool bConnected					= pClient->IsConnected();
-	
-	while( bConnected && !pClient->mbDisconnectRequest )
+	//---------------------------------------------------------------------------------------------
+	// Try finishing sending a pending command to Server
+	//---------------------------------------------------------------------------------------------
+	if( client.mPendingSend.IsPending() )
 	{
-		std::this_thread::sleep_for(std::chrono::milliseconds(1));
-		//std::this_thread::yield();
-		bConnected = Communications_Outgoing(*pClient) && Communications_Incoming(*pClient);
+		Network::DataSend(client.mpSocketComs, client.mPendingSend);
+		
+		// Free allocated memory for command
+		if( client.mPendingSend.IsDone() )
+		{
+			if( client.mPendingSend.IsError() ){
+				client.mbDisconnectPending = true;
+			}
+			if( client.mPendingSend.bAutoFree ){
+				netImguiDeleteSafe(client.mPendingSend.pCommand);
+			}
+			client.mPendingSend = PendingCom();
+		}
 	}
-
-	pClient->KillSocketComs();
-	pClient->mbClientThreadActive	= false;
+	//---------------------------------------------------------------------------------------------
+	// Initiate sending next command to Server, when none are in flight
+	// Keep track of what command was last send to prevent 1 type to monopolize coms
+	//---------------------------------------------------------------------------------------------
+	constexpr CmdHeader::eCommands kCommandsOrder[] = {
+		CmdHeader::eCommands::Texture, CmdHeader::eCommands::Background, 
+		CmdHeader::eCommands::Clipboard, CmdHeader::eCommands::DrawFrame};
+	constexpr uint32_t kCommandCounts = static_cast<uint32_t>(sizeof(kCommandsOrder)/sizeof(CmdHeader::eCommands));
+	
+	uint32_t Index(client.mPendingSendNext);
+	while( client.mPendingSend.IsReady() && (Index-client.mPendingSendNext)<kCommandCounts )
+	{
+		CmdHeader::eCommands NextCmd = kCommandsOrder[Index++ % kCommandCounts];
+		switch( NextCmd )
+		{
+			case CmdHeader::eCommands::Texture:		Communications_Outgoing_Textures(client); break;
+			case CmdHeader::eCommands::Background:	Communications_Outgoing_Background(client); break;
+			case CmdHeader::eCommands::Clipboard:	Communications_Outgoing_Clipboard(client); break;
+			case CmdHeader::eCommands::DrawFrame:	Communications_Outgoing_Frame(client); break;
+			// Commands not sent in main loop, by Client
+			case CmdHeader::eCommands::Input:
+			case CmdHeader::eCommands::Version:
+			case CmdHeader::eCommands::Count: break;
+		}
+		if( client.mPendingSend.IsPending() ){
+			client.mPendingSendNext = Index;
+		}
+	}
 }
 
 //=================================================================================================
-// COMMUNICATIONS WAIT THREAD 
+// COMMUNICATIONS INITIALIZE
+// Initialize a new connection to a RemoteImgui server
+//=================================================================================================
+bool Communications_Initialize(ClientInfo& client)
+{
+	CmdVersion cmdVersionSend, cmdVersionRcv;
+	PendingCom PendingRcv, PendingSend;
+	
+	client.mbComInitActive = true;
+
+	//---------------------------------------------------------------------
+	// Handshake confirming connection validity
+	//---------------------------------------------------------------------	
+	PendingRcv.pCommand = reinterpret_cast<CmdPendingRead*>(&cmdVersionRcv);
+	while( !PendingRcv.IsDone() && cmdVersionRcv.mType == CmdHeader::eCommands::Version )
+	{
+		while( !client.mbDisconnectPending && !Network::DataReceivePending(client.mpSocketPending) ){
+			std::this_thread::yield(); // Idle until we receive the remote data
+		}
+		Network::DataReceive(client.mpSocketPending, PendingRcv);
+	}
+
+	bool bForceConnect	= client.mServerForceConnectEnabled && (cmdVersionRcv.mFlags & static_cast<uint8_t>(CmdVersion::eFlags::ConnectForce)) != 0;
+	bool bCanConnect 	= !PendingRcv.IsError() && 
+						  cmdVersionRcv.mType		== cmdVersionSend.mType && 
+						  cmdVersionRcv.mVersion	== cmdVersionSend.mVersion &&
+						  cmdVersionRcv.mWCharSize	== cmdVersionSend.mWCharSize &&
+						  (!client.IsConnected() || bForceConnect);
+
+	StringCopy(cmdVersionSend.mClientName, client.mName);
+	cmdVersionSend.mFlags			= client.IsConnected() && !bCanConnect ? static_cast<uint8_t>(CmdVersion::eFlags::IsConnected): 0;
+	cmdVersionSend.mFlags			|= client.IsConnected() && !client.mServerForceConnectEnabled ? static_cast<uint8_t>(CmdVersion::eFlags::IsUnavailable) : 0;
+	
+	PendingSend.pCommand 	= reinterpret_cast<CmdPendingRead*>(&cmdVersionSend);
+	while( !PendingSend.IsDone() ){
+		Network::DataSend(client.mpSocketPending, PendingSend);
+	}
+
+	//---------------------------------------------------------------------
+	// Connection established, init client
+	//---------------------------------------------------------------------
+	if( bCanConnect && !PendingSend.IsError() && (!client.IsConnected() || bForceConnect) )
+	{
+		Network::SocketInfo* pNewComSocket = client.mpSocketPending.exchange(nullptr);
+
+		// If we detect an active connection with Server and 'ForceConnect was requested, close it first
+		if( client.IsConnected() )
+		{
+			client.mbDisconnectPending = true;
+			while( client.IsConnected() );
+		}
+
+		for(auto& texture : client.mTextures)
+		{
+			texture.mbSent = false;
+		}
+
+		client.mpSocketComs					= pNewComSocket;					// Take ownerhip of socket
+		client.mbHasTextureUpdate			= true;								// Force sending the client textures
+		client.mBGSettingSent.mTextureId	= client.mBGSetting.mTextureId-1u;	// Force sending the Background settings (by making different than current settings)
+		client.mFrameIndex					= 0;
+		client.mPendingSendNext				= 0;
+		client.mServerForceConnectEnabled	= (cmdVersionRcv.mFlags & static_cast<uint8_t>(CmdVersion::eFlags::ConnectExclusive)) == 0;
+		client.mPendingRcv					= PendingCom();
+		client.mPendingSend					= PendingCom();
+	}
+	
+	// Disconnect pending socket if init failed
+	Network::SocketInfo* SocketPending	= client.mpSocketPending.exchange(nullptr);
+	bool bValidConnection				= SocketPending == nullptr;
+	if( SocketPending ){
+		NetImgui::Internal::Network::Disconnect(SocketPending);
+	}
+
+	client.mbComInitActive = false;
+	return bValidConnection;
+}
+
+//=================================================================================================
+// COMMUNICATIONS MAIN LOOP 
+//=================================================================================================
+void Communications_Loop(void* pClientVoid)
+{
+	IM_ASSERT(pClientVoid != nullptr);
+	ClientInfo* pClient				= reinterpret_cast<ClientInfo*>(pClientVoid);
+	pClient->mbDisconnectPending	= false;
+	pClient->mbClientThreadActive 	= true;
+	
+	while( !pClient->mbDisconnectPending )
+	{
+		Communications_Outgoing(*pClient);
+		Communications_Incoming(*pClient);
+	}
+
+	Network::SocketInfo* pSocket = pClient->mpSocketComs.exchange(nullptr);
+	if (pSocket){
+		NetImgui::Internal::Network::Disconnect(pSocket);
+	}
+	pClient->mbClientThreadActive 	= false;
+}
+
+//=================================================================================================
+// COMMUNICATIONS CONNECT THREAD : Reach out and connect to a NetImGuiServer
+//=================================================================================================
+void CommunicationsConnect(void* pClientVoid)
+{
+	IM_ASSERT(pClientVoid != nullptr);
+	ClientInfo* pClient	= reinterpret_cast<ClientInfo*>(pClientVoid);
+	if( Communications_Initialize(*pClient) )
+	{
+		Communications_Loop(pClientVoid);
+	}
+}
+
+//=================================================================================================
+// COMMUNICATIONS HOST THREAD : Waiting NetImGuiServer reaching out to us. 
+//								Launch a new com loop when connection is established
 //=================================================================================================
 void CommunicationsHost(void* pClientVoid)
 {
 	ClientInfo* pClient				= reinterpret_cast<ClientInfo*>(pClientVoid);
 	pClient->mbListenThreadActive	= true;
-	pClient->mbDisconnectRequest	= false;
+	pClient->mbDisconnectListen		= false;
 	pClient->mpSocketListen			= pClient->mpSocketPending.exchange(nullptr);
 	
-	while( pClient->mpSocketListen.load() != nullptr && !pClient->mbDisconnectRequest )
+	while( pClient->mpSocketListen.load() != nullptr && !pClient->mbDisconnectListen )
 	{
 		pClient->mpSocketPending = Network::ListenConnect(pClient->mpSocketListen);
-		if( pClient->mpSocketPending.load() != nullptr )
+		if( pClient->mpSocketPending.load() != nullptr && Communications_Initialize(*pClient) )
 		{
-			bool bConnected = Communications_Initialize(*pClient);
-			while (bConnected && !pClient->mbDisconnectRequest)
-			{
-				std::this_thread::sleep_for(std::chrono::milliseconds(1));
-				//std::this_thread::yield();
-				bConnected	= Communications_Outgoing(*pClient) && Communications_Incoming(*pClient);
-			}
-			pClient->KillSocketComs();
+			pClient->mThreadFunction(Client::Communications_Loop, pClient);
 		}
-		std::this_thread::sleep_for(std::chrono::milliseconds(10));	// Prevents this thread from taking entire core, waiting on server connection
+		std::this_thread::sleep_for(std::chrono::milliseconds(16));	// Prevents this thread from taking entire core, waiting on server connection requests
 	}
-	pClient->KillSocketListen();
+
+	Network::SocketInfo* pSocket 	= pClient->mpSocketListen.exchange(nullptr);
+	NetImgui::Internal::Network::Disconnect(pSocket);
 	pClient->mbListenThreadActive	= false;
 }
 
@@ -444,6 +529,9 @@ ClientInfo::ClientInfo()
 , mFontTextureID(TextureCastFromUInt(uint64_t(0u)))
 , mTexturesPendingSent(0)
 , mTexturesPendingCreated(0)
+, mbClientThreadActive(false)
+, mbListenThreadActive(false)
+, mbComInitActive(false)
 {
 	memset(mTexturesPending, 0, sizeof(mTexturesPending));
 }
@@ -500,22 +588,13 @@ void ClientInfo::ContextOverride()
 
 	// Keep a copy of original settings of this context	
 	mSavedContextValues.Save(mpContext);
-	mTimeTracking = std::chrono::high_resolution_clock::now();
+	mLastOutgoingDrawCheckTime = std::chrono::steady_clock::now();
 
 	// Override some settings
 	// Note: Make sure every setting overwritten here, are handled in 'SavedImguiContext::Save(...)'
 	{
 		ImGuiIO& newIO						= ImGui::GetIO();
 		newIO.MouseDrawCursor				= false;
-#if IMGUI_VERSION_NUM >= 19110
-		ImGui::GetPlatformIO().Platform_GetClipboardTextFn	= GetClipboardTextFn_NetImguiImpl;
-		ImGui::GetPlatformIO().Platform_SetClipboardTextFn	= SetClipboardTextFn_NetImguiImpl;
-		ImGui::GetPlatformIO().Platform_ClipboardUserData	= this;
-#else
-		newIO.GetClipboardTextFn			= GetClipboardTextFn_NetImguiImpl;
-		newIO.SetClipboardTextFn			= SetClipboardTextFn_NetImguiImpl;
-		newIO.ClipboardUserData				= this;
-#endif
 		newIO.BackendPlatformName			= "NetImgui";
 		newIO.BackendRendererName			= "DirectX11";
 		if( mFontCreationFunction != nullptr )
@@ -529,8 +608,18 @@ void ClientInfo::ContextOverride()
 			newIO.KeyMap[i] = i;
 		}
 #endif
+#if IMGUI_VERSION_NUM < 19110
+		newIO.GetClipboardTextFn				= GetClipboardTextFn_NetImguiImpl;
+		newIO.SetClipboardTextFn				= SetClipboardTextFn_NetImguiImpl;
+		newIO.ClipboardUserData					= this;
+#else
+		ImGuiPlatformIO& platformIO 			= ImGui::GetPlatformIO();
+		platformIO.Platform_GetClipboardTextFn	= GetClipboardTextFn_NetImguiImpl;
+		platformIO.Platform_SetClipboardTextFn	= SetClipboardTextFn_NetImguiImpl;
+		platformIO.Platform_ClipboardUserData	= this;
+#endif
 #if defined(IMGUI_HAS_VIEWPORT)
-		newIO.ConfigFlags					&= ~(ImGuiConfigFlags_ViewportsEnable); // Viewport unsupported at the moment
+		newIO.ConfigFlags &= ~(ImGuiConfigFlags_ViewportsEnable); // Viewport unsupported at the moment
 #endif
 	}
 }
@@ -544,7 +633,16 @@ void ClientInfo::ContextRestore()
 	if (IsContextOverriden() && ImGui::GetCurrentContext() == mpContext)
 	{
 #ifdef IMGUI_HAS_VIEWPORT
-		ImGui::UpdatePlatformWindows(); // Prevents issue with mismatched frame tracking, when restoring enabled viewport feature
+
+//*************************************************************************************************
+// COG: Disabling the call ImGui::UpdatePlatformWindows() otherwise it gets called twice when
+// disconnecting causing this assert in ImGui::UpdatePlatformWindows():
+//
+//		IM_ASSERT(g.FrameCountPlatformEnded < g.FrameCount);
+//*************************************************************************************************
+
+		//ImGui::UpdatePlatformWindows(); // Prevents issue with mismatched frame tracking, when restoring enabled viewport feature
+
 #endif
 		if( mFontCreationFunction && ImGui::GetIO().Fonts && ImGui::GetIO().Fonts->Fonts.size() > 0)
 		{

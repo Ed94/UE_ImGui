@@ -4,12 +4,12 @@
 //! @Name		: NetImgui
 //=================================================================================================
 //! @author		: Sammy Fatnassi
-//! @date		: 2023/12/30
-//!	@version	: v1.10.0
+//! @date		: 2024/12/10
+//!	@version	: v1.12.1
 //! @Details	: For integration info : https://github.com/sammyfreg/netImgui/wiki
 //=================================================================================================
-#define NETIMGUI_VERSION		"1.10.0"	// Version 1.10 Release
-#define NETIMGUI_VERSION_NUM	11000
+#define NETIMGUI_VERSION		"1.12.1"	// Fixed disconnect thread contention and clipboard command
+#define NETIMGUI_VERSION_NUM	11201
 
 
 
@@ -48,21 +48,22 @@
 	#include "NetImgui_Config.h"
 #endif
 
-
 //-------------------------------------------------------------------------------------------------
 // If 'NETIMGUI_ENABLED' hasn't been defined yet (in project settings or NetImgui_Config.h') 
 // we define this library as 'Disabled'
 //-------------------------------------------------------------------------------------------------
-#if !defined(NETIMGUI_ENABLED)
+#ifndef NETIMGUI_ENABLED
 	#define NETIMGUI_ENABLED 0
 #endif
 
+//-------------------------------------------------------------------------------------------------
 // NetImgui needs to detect Dear ImGui to be active, otherwise we disable it
 // When including this header, make sure imgui.h is included first 
 // (either always included in NetImgui_config.h or have it included after Imgui.h in your cpp)
+//-------------------------------------------------------------------------------------------------
 #if !defined(IMGUI_VERSION)
 	#undef	NETIMGUI_ENABLED
-	#define	NETIMGUI_ENABLED 0
+	#define NETIMGUI_ENABLED 0
 #endif
 
 #if NETIMGUI_ENABLED

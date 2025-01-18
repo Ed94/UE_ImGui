@@ -1,9 +1,9 @@
 using UnrealBuildTool;
 using System.IO;
 
-public class ImGui : ModuleRules
+public class ImPlot : ModuleRules
 {
-    public ImGui(ReadOnlyTargetRules Target) : base(Target)
+    public ImPlot(ReadOnlyTargetRules Target) : base(Target)
     {
         Type = ModuleType.External;
         PublicSystemIncludePaths.Add(ModuleDirectory);
