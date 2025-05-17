@@ -10,7 +10,7 @@
 #include <Widgets/SWindow.h>
 
 #if WITH_ENGINE
-#include <TextureResource.h>
+#include <ImageUtils.h>
 #endif
 
 THIRD_PARTY_INCLUDES_START
@@ -343,13 +343,9 @@ void FImGuiContext::Initialize()
 	ImGuiIO& IO = ImGui::GetIO();
 	IO.UserData = this;
 
+	IO.ConfigNavMoveSetMousePos = true;
 	IO.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
 	IO.ConfigFlags |= ImGuiConfigFlags_NavEnableGamepad;
-	
-	//IO.ConfigFlags |= ImGuiConfigFlags_NavEnableSetMousePos;
-	IO.ConfigNavMoveSetMousePos = false;
-	// NOTE(ED): MAKE THIS TRUE (MAYBE) IF YOUR DOING CUSTOM IMGUI ON CONSOLES.
-	
 	IO.ConfigFlags |= ImGuiConfigFlags_DockingEnable;
 	IO.ConfigFlags |= ImGuiConfigFlags_DpiEnableScaleViewports;
 
@@ -526,22 +522,36 @@ void FImGuiContext::OnDisplayMetricsChanged(const FDisplayMetrics& DisplayMetric
 	ImGuiPlatformIO& PlatformIO = ImGui::GetPlatformIO();
 	PlatformIO.Monitors.resize(0);
 
-	for (const FMonitorInfo& Monitor : DisplayMetrics.MonitorInfo)
+	if (DisplayMetrics.MonitorInfo.IsEmpty())
 	{
 		ImGuiPlatformMonitor ImGuiMonitor;
-		ImGuiMonitor.MainPos = FIntPoint(Monitor.DisplayRect.Left, Monitor.DisplayRect.Top);
-		ImGuiMonitor.MainSize = FIntPoint(Monitor.DisplayRect.Right - Monitor.DisplayRect.Left, Monitor.DisplayRect.Bottom - Monitor.DisplayRect.Top);
-		ImGuiMonitor.WorkPos = FIntPoint(Monitor.WorkArea.Left, Monitor.WorkArea.Top);
-		ImGuiMonitor.WorkSize = FIntPoint(Monitor.WorkArea.Right - Monitor.WorkArea.Left, Monitor.WorkArea.Bottom - Monitor.WorkArea.Top);
-		ImGuiMonitor.DpiScale = Monitor.DPI / 96.0f;
+		ImGuiMonitor.MainPos = FIntPoint(0, 0);
+		ImGuiMonitor.MainSize = FIntPoint(DisplayMetrics.PrimaryDisplayWidth, DisplayMetrics.PrimaryDisplayHeight);
+		ImGuiMonitor.WorkPos = FIntPoint(DisplayMetrics.PrimaryDisplayWorkAreaRect.Left, DisplayMetrics.PrimaryDisplayWorkAreaRect.Top);
+		ImGuiMonitor.WorkSize = FIntPoint(DisplayMetrics.PrimaryDisplayWorkAreaRect.Right - DisplayMetrics.PrimaryDisplayWorkAreaRect.Left, DisplayMetrics.PrimaryDisplayWorkAreaRect.Bottom - DisplayMetrics.PrimaryDisplayWorkAreaRect.Top);
+		ImGuiMonitor.DpiScale = 1.0f;
 
-		if (Monitor.bIsPrimary)
+		PlatformIO.Monitors.push_front(ImGuiMonitor);
+	}
+	else
+	{
+		for (const FMonitorInfo& Monitor : DisplayMetrics.MonitorInfo)
 		{
-			PlatformIO.Monitors.push_front(ImGuiMonitor);
-		}
-		else
-		{
-			PlatformIO.Monitors.push_back(ImGuiMonitor);
+			ImGuiPlatformMonitor ImGuiMonitor;
+			ImGuiMonitor.MainPos = FIntPoint(Monitor.DisplayRect.Left, Monitor.DisplayRect.Top);
+			ImGuiMonitor.MainSize = FIntPoint(Monitor.DisplayRect.Right - Monitor.DisplayRect.Left, Monitor.DisplayRect.Bottom - Monitor.DisplayRect.Top);
+			ImGuiMonitor.WorkPos = FIntPoint(Monitor.WorkArea.Left, Monitor.WorkArea.Top);
+			ImGuiMonitor.WorkSize = FIntPoint(Monitor.WorkArea.Right - Monitor.WorkArea.Left, Monitor.WorkArea.Bottom - Monitor.WorkArea.Top);
+			ImGuiMonitor.DpiScale = Monitor.DPI / 96.0f;
+
+			if (Monitor.bIsPrimary)
+			{
+				PlatformIO.Monitors.push_front(ImGuiMonitor);
+			}
+			else
+			{
+				PlatformIO.Monitors.push_back(ImGuiMonitor);
+			}
 		}
 	}
 }
@@ -562,22 +572,13 @@ void FImGuiContext::BeginFrame()
 
 	if (!IO.Fonts->IsBuilt() || !FontAtlasTexturePtr.IsValid())
 	{
-		uint8* TextureDataRaw;
+		uint8* TextureData;
 		int32 TextureWidth, TextureHeight, BytesPerPixel;
-		IO.Fonts->GetTexDataAsRGBA32(&TextureDataRaw, &TextureWidth, &TextureHeight, &BytesPerPixel);
+		IO.Fonts->GetTexDataAsRGBA32(&TextureData, &TextureWidth, &TextureHeight, &BytesPerPixel);
 
 #if WITH_ENGINE
-		UTexture2D* FontAtlasTexture = UTexture2D::CreateTransient(TextureWidth, TextureHeight, PF_R8G8B8A8, TEXT("ImGuiFontAtlas"));
-		FontAtlasTexture->Filter = TF_Bilinear;
-		FontAtlasTexture->AddressX = TA_Wrap;
-		FontAtlasTexture->AddressY = TA_Wrap;
-
-		uint8* FontAtlasTextureData = static_cast<uint8*>(FontAtlasTexture->GetPlatformData()->Mips[0].BulkData.Lock(LOCK_READ_WRITE));
-		FMemory::Memcpy(FontAtlasTextureData, TextureDataRaw, TextureWidth * TextureHeight * BytesPerPixel);
-		FontAtlasTexture->GetPlatformData()->Mips[0].BulkData.Unlock();
-		FontAtlasTexture->UpdateResource();
-
-		FontAtlasTexturePtr.Reset(FontAtlasTexture);
+		const FImageView TextureView(TextureData, TextureWidth, TextureHeight, ERawImageFormat::BGRA8);
+		FontAtlasTexturePtr.Reset(FImageUtils::CreateTexture2DFromImage(TextureView));
 #else
 		FontAtlasTexturePtr = FSlateDynamicImageBrush::CreateWithImageData(
 			TEXT("ImGuiFontAtlas"), FVector2D(TextureWidth, TextureHeight),
