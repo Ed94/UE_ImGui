@@ -1,13 +1,11 @@
 using UnrealBuildTool;
 using System.IO;
 
-public class NetImGui : ModuleRules
+public class NetImgui : ModuleRules
 {
-    public NetImGui(ReadOnlyTargetRules Target) : base(Target)
+    public NetImgui(ReadOnlyTargetRules Target) : base(Target)
     {
         Type = ModuleType.External;
         PublicSystemIncludePaths.Add(ModuleDirectory);
-
-		PublicDependencyModuleNames.Add("Sockets");
     }
 }
